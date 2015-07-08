@@ -3,7 +3,8 @@ from __future__ import print_function
 import requests, sys, argparse, re
 
 class ElasticSearchMessage:
-	IPTABLES_COMMAND = "IPTABLES -A INPUT -p {proto} -m {proto} -s {source} --dport {dport} -m state --state NEW -j ACCEPT"
+	IPTABLES_COMMAND_INPUT = "IPTABLES -A INPUT -p {proto} -m {proto} -s {ip} --dport {dport} -m state --state NEW -j ACCEPT"
+	IPTABLES_COMMAND_OUTPUT = "IPTABLES -A OUTPUT -p {proto} -m {proto} -d {ip} --dport {dport} -m state --state NEW -j ACCEPT"
 	""" represents a message returned from elasticsearch"""
 	def __init__(self, message):
 		self.message = message
@@ -12,12 +13,22 @@ class ElasticSearchMessage:
 	def toIptables(self):
 		"""returns the iptables command or None if the message doesn't contain the required information"""
 
-		extractor = re.compile("SRC=(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}).*?PROTO=(TCP|UDP).*?DPT=(\d{1,4})")
+		extractor = re.compile("(IN=.*?OUT=.*?) .*?SRC=(\S{1,3}\.\S{1,3}\.\S{1,3}\.\S{1,3}).*?DST=(\S{1,3}\.\S{1,3}\.\S{1,3}\.\S{1,3}).*?PROTO=(TCP|UDP).*?DPT=(\d{1,4})")
 		match = extractor.search(self.message["_source"]["message"])
 		if match is None:
 			return None
+			
+		devs = match.group(1).split(' ')
+		command=""
+		sendIp = ""
+		if devs[0] == "IN=":
+			command = self.IPTABLES_COMMAND_OUTPUT
+			sendIp = match.group(3)
+		else:
+			command = self.IPTABLES_COMMAND_INPUT
+			sendIp = match.group(2)
 
-		return self.IPTABLES_COMMAND.format(source=match.group(1), proto=match.group(2), dport=match.group(3))
+		return command.format(ip=sendIp, proto=match.group(4), dport=match.group(4))
 
 class LogRetriever:
 	"""handles querying elasticsearch for messages. apiUrl should have named format groups date, id, and port
@@ -44,6 +55,7 @@ def main():
 
 	logRetriever = LogRetriever(LOG_PORT, API_URL)
 	fullMessage = logRetriever.retrieveMessageJson(args.date, args.id)
+
 	match = ElasticSearchMessage(fullMessage).toIptables()
 
 	if match is None:
